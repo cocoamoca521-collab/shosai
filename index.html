@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="書斎">
+<meta name="theme-color" content="#131722">
+<title>書斎 — SS Studio</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%23131722'/><rect x='22' y='22' width='56' height='56' rx='8' fill='none' stroke='%23c8503a' stroke-width='6' transform='rotate(-4 50 50)'/><text x='50' y='63' font-size='38' text-anchor='middle' fill='%23c8503a' font-family='serif' transform='rotate(-4 50 50)'>書</text></svg>">
+<link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23131722'/><rect x='22' y='22' width='56' height='56' rx='8' fill='none' stroke='%23c8503a' stroke-width='6' transform='rotate(-4 50 50)'/><text x='50' y='63' font-size='38' text-anchor='middle' fill='%23c8503a' font-family='serif' transform='rotate(-4 50 50)'>書</text></svg>">
+<link rel="manifest" href="manifest.json">
+<script>
+if (location.protocol === "https:" && "serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch(function(e){ console.warn("SW registration failed", e); });
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@400;500;600&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; }
+  body { background:#131722; overflow:hidden; }
+  #root { height:100%; height:100dvh; }
+  textarea, input, select, button { font-family:inherit; }
+  textarea::placeholder, input::placeholder { color:#565e72; }
+  ::-webkit-scrollbar { width:4px; }
+  ::-webkit-scrollbar-thumb { background:#2c3345; border-radius:2px; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+  @keyframes paperIn { from { opacity:0; transform:translateY(14px) rotate(-0.3deg); } to { opacity:1; transform:none; } }
+  @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ═══ Theme ═══
+const FONT_UI = "'Zen Kaku Gothic New', sans-serif";
+const FONT_BODY = "'Shippori Mincho', serif";
+const T = {
+  bg: "#131722",          // 夜の書斎
+  panel: "#1b2130",
+  line: "rgba(255,255,255,0.07)",
+  ink: "#dfe3ec",
+  sub: "#8b93a7",
+  faint: "#565e72",
+  shu: "#c8503a",         // 朱 — 落款
+  shuSoft: "rgba(200,80,58,0.14)",
+  paper: "#f1ead9",       // 生成り
+  paperInk: "#2c2721",
+  paperSub: "#8a7f6d",
+  paperLine: "rgba(90,70,50,0.16)",
+};
+
+// ═══ Models / Length ═══
+const MODELS = [
+  { id:"claude-sonnet-4-6", tag:"Sonnet 4.6", note:"バランス型・普段使い" },
+  { id:"claude-sonnet-5", tag:"Sonnet 5", note:"新世代Sonnet・速さと賢さ" },
+  { id:"claude-opus-4-8", tag:"Opus 4.8", note:"重厚・本気の一本に" },
+  { id:"claude-fable-5", tag:"Fable 5", note:"最新最上位" },
+  { id:"claude-haiku-4-5-20251001", tag:"Haiku 4.5", note:"高速・ラフ案出し" },
+  { id:"claude-opus-4-7", tag:"Opus 4.7", note:"旧世代", legacy:true },
+  { id:"claude-opus-4-6", tag:"Opus 4.6", note:"旧世代", legacy:true },
+  { id:"claude-opus-4-5", tag:"Opus 4.5", note:"旧世代", legacy:true },
+  { id:"claude-sonnet-4-5", tag:"Sonnet 4.5", note:"旧世代", legacy:true },
+  { id:"claude-opus-4-1", tag:"Opus 4.1", note:"旧世代", legacy:true },
+  { id:"claude-sonnet-4-0", tag:"Sonnet 4", note:"旧世代", legacy:true },
+];
+const LENGTHS = [
+  { id:"tanagokoro", label:"掌編", hint:"〜800字", maxTokens:2000, instr:"800字前後の掌編として" },
+  { id:"tanpen", label:"短編", hint:"〜2000字", maxTokens:4000, instr:"2000字前後の短編として" },
+  { id:"jikkuri", label:"じっくり", hint:"〜4000字", maxTokens:8000, instr:"4000字前後で、じっくり" },
+];
+
+// ═══ Storage ═══
+const STORE_KEY = "ss_studio_v1";
+const newWork = (name) => ({
+  id: "w" + Date.now() + Math.random().toString(36).slice(2,6),
+  name: name || "新しい作品",
+  world: "", chars: "", style: "",
+  library: [],
+});
+function loadStore() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) { const s = JSON.parse(raw); if (s.works?.length) { s.customModels = s.customModels || []; return s; } }
+  } catch(e) { console.warn("load failed", e); }
+  const w = newWork("最初の作品");
+  return { apiKey:"", model:MODELS[0].id, lengthId:"tanpen", works:[w], activeWorkId:w.id, customModels:[] };
+}
+function saveStore(s) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(s)); } catch(e) { console.warn("save failed", e); }
+}
+
+// ═══ System prompt ═══
+function buildSystem(work) {
+  let s = "あなたは熟練の小説家です。以下の設定資料の世界で、依頼されたお題の短編小説（SS）を日本語で書いてください。\n";
+  if (work.world?.trim()) s += "\n【世界観】\n" + work.world.trim() + "\n";
+  if (work.chars?.trim()) s += "\n【キャラクター】\n" + work.chars.trim() + "\n";
+  if (work.style?.trim()) s += "\n【文体・ルール】\n" + work.style.trim() + "\n";
+  s += `
+【出力形式】
+- 1行目にタイトルを『』で囲んで書く
+- 2行目は空行、3行目から本文
+- 前置き・後書き・解説は一切書かない。本文のみ
+- 設定資料と矛盾しないこと`;
+  return s;
+}
+
+// ═══ Streaming API call ═══
+async function streamCall({ apiKey, model, system, messages, maxTokens, onDelta, signal }) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    signal,
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({ model, max_tokens: maxTokens, system, messages, stream: true }),
+  });
+  if (!res.ok) {
+    let errData = null;
+    try { errData = await res.json(); } catch(e) {}
+    const err = new Error(errData?.error?.message || ("HTTP " + res.status));
+    err._status = res.status;
+    throw err;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream:true });
+    const lines = buf.split("\n");
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let ev = null;
+      try { ev = JSON.parse(payload); } catch(e) { continue; }
+      if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") {
+        full += ev.delta.text;
+        onDelta(full);
+      }
+      if (ev.type === "error") throw new Error(ev.error?.message || "stream error");
+    }
+  }
+  return full;
+}
+
+function errorText(err) {
+  const s = err._status || 0;
+  const m = (err.message || "").toLowerCase();
+  if (err.name === "AbortError") return "生成を中断しました。";
+  if (!s) return "通信できませんでした。回線を確認して、もう一度どうぞ。";
+  if (s === 401 || s === 403) return "APIキーが通りません。設定 ⚙️ から確認してください。";
+  if (s === 429) return m.includes("credit") || m.includes("balance") ? "残高が足りないようです。チャージしてから再開を。" : "リクエストが混みすぎです。少し置いてもう一度。";
+  if (s >= 500) return "サーバー側の不調です。時間を置いて再試行を。";
+  return "エラー: " + (err.message || "不明。もう一度お試しください。");
+}
+
+// ═══ Small parts ═══
+function parseTitle(text) {
+  const first = (text || "").split("\n")[0].trim();
+  const m = first.match(/^『(.+)』$/);
+  return m ? m[1] : "";
+}
+function bodyOnly(text) {
+  const lines = (text || "").split("\n");
+  if (lines[0]?.match(/^『.+』$/)) return lines.slice(1).join("\n").replace(/^\n+/, "");
+  return text || "";
+}
+function charCount(text) { return (text || "").replace(/\s/g, "").length; }
+function fmtDate(ts) {
+  const d = new Date(ts);
+  return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+}
+function download(filename, text) {
+  const blob = new Blob([text], { type:"text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}
+
+// ═══ Shared styles ═══
+const overlay = { position:"fixed", inset:0, background:"rgba(10,13,20,0.78)", backdropFilter:"blur(8px)", zIndex:50, display:"flex", alignItems:"flex-end", justifyContent:"center" };
+const sheet = { width:"100%", maxWidth:"640px", maxHeight:"88dvh", background:T.panel, borderRadius:"20px 20px 0 0", border:`1px solid ${T.line}`, borderBottom:"none", display:"flex", flexDirection:"column", overflow:"hidden", animation:"fadeIn .25s ease-out" };
+const sheetHead = { padding:"16px 18px 12px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:`1px solid ${T.line}`, flexShrink:0 };
+const hTitle = { fontFamily:FONT_UI, fontSize:"15px", fontWeight:700, color:T.ink, letterSpacing:".05em" };
+const closeBtn = { background:"none", border:"none", color:T.sub, fontSize:"18px", cursor:"pointer", padding:"4px 8px" };
+const fieldLabel = { fontFamily:FONT_UI, fontSize:"11px", fontWeight:700, color:T.sub, letterSpacing:".12em", marginBottom:"6px", display:"block" };
+const taStyle = { width:"100%", padding:"12px", borderRadius:"12px", border:`1px solid ${T.line}`, background:"rgba(255,255,255,0.03)", color:T.ink, fontSize:"13px", lineHeight:"1.9", fontFamily:FONT_UI, outline:"none", resize:"vertical" };
+const inStyle = { ...taStyle, resize:"none" };
+const btnPri = { flex:1, padding:"13px", borderRadius:"12px", border:"none", background:T.shu, color:"#fff", fontSize:"14px", fontWeight:700, fontFamily:FONT_UI, cursor:"pointer", letterSpacing:".08em" };
+const btnSec = { flex:1, padding:"13px", borderRadius:"12px", border:`1px solid ${T.line}`, background:"transparent", color:T.sub, fontSize:"14px", fontFamily:FONT_UI, cursor:"pointer" };
+
+// ═══ Docs editor (作品の設定資料) ═══
+function DocsEditor({ work, onSave, onDelete, canDelete, onClose }) {
+  const [w, setW] = useState({ ...work });
+  const set = (k, v) => setW(p => ({ ...p, [k]:v }));
+  return (
+    <div style={overlay}>
+      <div style={sheet}>
+        <div style={sheetHead}>
+          <div style={hTitle}>📚 設定資料</div>
+          <button onClick={onClose} style={closeBtn}>✕</button>
+        </div>
+        <div style={{ flex:1, overflowY:"auto", padding:"16px 18px" }}>
+          <label style={fieldLabel}>作品名</label>
+          <input value={w.name} onChange={e => set("name", e.target.value)} style={{ ...inStyle, marginBottom:"16px" }} />
+          <label style={fieldLabel}>世界観</label>
+          <textarea value={w.world} onChange={e => set("world", e.target.value)} rows={5} placeholder="舞台・時代・空気感・固有名詞など" style={{ ...taStyle, marginBottom:"16px" }} />
+          <label style={fieldLabel}>キャラクター</label>
+          <textarea value={w.chars} onChange={e => set("chars", e.target.value)} rows={7} placeholder="名前・一人称・口調・関係性・性格の核など" style={{ ...taStyle, marginBottom:"16px" }} />
+          <label style={fieldLabel}>文体・ルール</label>
+          <textarea value={w.style} onChange={e => set("style", e.target.value)} rows={5} placeholder="視点(一人称/三人称)・温度感・やってほしいこと・禁止事項など" style={{ ...taStyle, marginBottom:"4px" }} />
+          {canDelete && (
+            <button onClick={() => { if (confirm(`「${work.name}」を保存作品ごと削除します。よろしいですか？`)) onDelete(); }}
+              style={{ marginTop:"18px", padding:"10px 14px", borderRadius:"10px", border:"1px solid rgba(200,80,58,0.35)", background:"none", color:T.shu, fontSize:"12px", fontFamily:FONT_UI, cursor:"pointer" }}>
+              この作品を削除
+            </button>
+          )}
+        </div>
+        <div style={{ padding:"12px 18px 20px", display:"flex", gap:"10px", borderTop:`1px solid ${T.line}` }}>
+          <button onClick={onClose} style={btnSec}>キャンセル</button>
+          <button onClick={() => onSave(w)} style={btnPri}>保存する</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ Work switcher ═══
+function WorkSwitcher({ works, activeId, onSelect, onNew, onClose }) {
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={sheet} onClick={e => e.stopPropagation()}>
+        <div style={sheetHead}>
+          <div style={hTitle}>作品を切り替える</div>
+          <button onClick={onClose} style={closeBtn}>✕</button>
+        </div>
+        <div style={{ flex:1, overflowY:"auto", padding:"12px 14px" }}>
+          {works.map(w => (
+            <button key={w.id} onClick={() => onSelect(w.id)}
+              style={{ width:"100%", textAlign:"left", padding:"14px", marginBottom:"8px", borderRadius:"12px", cursor:"pointer",
+                border: w.id===activeId ? `1px solid ${T.shu}` : `1px solid ${T.line}`,
+                background: w.id===activeId ? T.shuSoft : "rgba(255,255,255,0.03)" }}>
+              <div style={{ fontFamily:FONT_UI, fontSize:"14px", fontWeight:700, color:T.ink }}>{w.name}</div>
+              <div style={{ fontFamily:FONT_UI, fontSize:"11px", color:T.sub, marginTop:"3px" }}>保存 {w.library.length} 編</div>
+            </button>
+          ))}
+          <button onClick={onNew} style={{ width:"100%", padding:"14px", borderRadius:"12px", border:`1px dashed ${T.faint}`, background:"none", color:T.sub, fontSize:"13px", fontFamily:FONT_UI, cursor:"pointer", marginBottom:"14px" }}>
+            ＋ 新しい作品をつくる
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ Library ═══
+function Library({ work, onOpen, onDelete, onClose }) {
+  const items = [...work.library].sort((a,b) => b.createdAt - a.createdAt);
+  return (
+    <div style={overlay}>
+      <div style={sheet}>
+        <div style={sheetHead}>
+          <div style={hTitle}>🗂 {work.name} の本棚</div>
+          <button onClick={onClose} style={closeBtn}>✕</button>
+        </div>
+        <div style={{ flex:1, overflowY:"auto", padding:"12px 14px 20px" }}>
+          {items.length === 0 && (
+            <div style={{ textAlign:"center", padding:"48px 20px", fontFamily:FONT_UI, fontSize:"13px", color:T.sub, lineHeight:"2" }}>
+              まだ何も並んでいません。<br/>お題を書いて生成し、「保存」でここに増えます。
+            </div>
+          )}
+          {items.map(it => (
+            <div key={it.id} style={{ padding:"14px", marginBottom:"8px", borderRadius:"12px", border:`1px solid ${T.line}`, background:"rgba(255,255,255,0.03)" }}>
+              <div onClick={() => onOpen(it)} style={{ cursor:"pointer" }}>
+                <div style={{ fontFamily:FONT_BODY, fontSize:"15px", fontWeight:600, color:T.ink }}>『{it.title || "無題"}』</div>
+                <div style={{ fontFamily:FONT_UI, fontSize:"11px", color:T.sub, marginTop:"4px" }}>{fmtDate(it.createdAt)} ・ {charCount(it.text).toLocaleString()}字</div>
+              </div>
+              <div style={{ display:"flex", gap:"8px", marginTop:"10px" }}>
+                <button onClick={() => onOpen(it)} style={{ ...miniBtn }}>読む</button>
+                <button onClick={() => download((it.title || "無題") + ".txt", it.text)} style={{ ...miniBtn }}>.txt</button>
+                <button onClick={() => { if (confirm(`『${it.title || "無題"}』を削除しますか？`)) onDelete(it.id); }} style={{ ...miniBtn, color:T.shu }}>削除</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+const miniBtn = { padding:"7px 14px", borderRadius:"9px", border:`1px solid ${T.line}`, background:"none", color:T.sub, fontSize:"12px", fontFamily:FONT_UI, cursor:"pointer" };
+
+// ═══ Settings ═══
+function Settings({ store, onSave, onClose }) {
+  const [apiKey, setApiKey] = useState(store.apiKey);
+  const [model, setModel] = useState(store.model);
+  const [customs, setCustoms] = useState(store.customModels || []);
+  const [showLegacy, setShowLegacy] = useState(false);
+  const [cTag, setCTag] = useState("");
+  const [cId, setCId] = useState("");
+  const fileRef = useRef(null);
+  const doExport = () => download("ss_studio_backup.json", JSON.stringify(store, null, 2));
+  const doImport = (file) => {
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const s = JSON.parse(r.result);
+        if (!s.works?.length) throw new Error("works missing");
+        saveStore(s); location.reload();
+      } catch(e) { alert("読み込めませんでした。SS Studioのバックアップファイルを選んでください。"); }
+    };
+    r.readAsText(file);
+  };
+  const addCustom = () => {
+    const id = cId.trim();
+    if (!id) return;
+    if ([...MODELS, ...customs].some(m => m.id === id)) { alert("そのIDはもう一覧にあります。"); return; }
+    setCustoms(p => [...p, { id, tag: cTag.trim() || id }]);
+    setCTag(""); setCId("");
+  };
+  const removeCustom = (id) => {
+    setCustoms(p => p.filter(m => m.id !== id));
+    if (model === id) setModel(MODELS[0].id);
+  };
+  const handleSave = () => {
+    const all = [...MODELS, ...customs];
+    const safeModel = all.some(m => m.id === model) ? model : MODELS[0].id;
+    onSave({ apiKey: apiKey.trim(), model: safeModel, customModels: customs });
+  };
+  const modelBtn = (m, note) => (
+    <button key={m.id} onClick={() => setModel(m.id)}
+      style={{ width:"100%", textAlign:"left", padding:"12px 14px", marginBottom:"8px", borderRadius:"12px", cursor:"pointer",
+        border: model===m.id ? `1px solid ${T.shu}` : `1px solid ${T.line}`,
+        background: model===m.id ? T.shuSoft : "rgba(255,255,255,0.03)" }}>
+      <span style={{ fontFamily:FONT_UI, fontSize:"13px", fontWeight:700, color:T.ink }}>{m.tag}</span>
+      <span style={{ fontFamily:FONT_UI, fontSize:"11px", color:T.sub, marginLeft:"10px" }}>{note ?? m.note}</span>
+    </button>
+  );
+  return (
+    <div style={overlay}>
+      <div style={sheet}>
+        <div style={sheetHead}>
+          <div style={hTitle}>⚙️ 設定</div>
+          <button onClick={onClose} style={closeBtn}>✕</button>
+        </div>
+        <div style={{ flex:1, overflowY:"auto", padding:"16px 18px" }}>
+          <label style={fieldLabel}>ANTHROPIC API キー</label>
+          <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk-ant-..." style={{ ...inStyle, marginBottom:"4px" }} />
+          <div style={{ fontFamily:FONT_UI, fontSize:"10px", color:T.faint, marginBottom:"18px" }}>キーはこの端末のブラウザ内にだけ保存されます</div>
+
+          <label style={fieldLabel}>モデル</label>
+          {MODELS.filter(m => !m.legacy).map(m => modelBtn(m))}
+          {customs.map(m => modelBtn(m, "カスタム"))}
+          <button onClick={() => setShowLegacy(s => !s)}
+            style={{ width:"100%", padding:"10px", marginBottom:"8px", borderRadius:"12px", border:`1px dashed ${T.faint}`, background:"none", color:T.sub, fontSize:"12px", fontFamily:FONT_UI, cursor:"pointer" }}>
+            {showLegacy ? "▲ 旧世代をたたむ" : "▼ 旧世代モデルを見る"}
+          </button>
+          {showLegacy && MODELS.filter(m => m.legacy).map(m => modelBtn(m))}
+
+          <label style={{ ...fieldLabel, marginTop:"14px" }}>カスタムモデル</label>
+          <div style={{ fontFamily:FONT_UI, fontSize:"10px", color:T.faint, marginBottom:"8px", lineHeight:"1.7" }}>
+            一覧にないモデルIDを直接追加できます（例: claude-mythos-5 のような限定モデルや、今後の新モデル）。IDのタイプミスはそのままエラーになるので正確に。
+          </div>
+          {customs.map(m => (
+            <div key={m.id} style={{ display:"flex", alignItems:"center", gap:"8px", padding:"10px 12px", marginBottom:"6px", borderRadius:"10px", border:`1px solid ${T.line}`, background:"rgba(255,255,255,0.02)" }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontFamily:FONT_UI, fontSize:"12px", fontWeight:700, color:T.ink }}>{m.tag}</div>
+                <div style={{ fontFamily:FONT_UI, fontSize:"10px", color:T.faint, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.id}</div>
+              </div>
+              <button onClick={() => removeCustom(m.id)} style={{ ...miniBtn, color:T.shu, flexShrink:0 }}>削除</button>
+            </div>
+          ))}
+          <input value={cTag} onChange={e => setCTag(e.target.value)} placeholder="表示名（例: Mythos 5）" style={{ ...inStyle, marginBottom:"6px" }} />
+          <input value={cId} onChange={e => setCId(e.target.value)} placeholder="モデルID（例: claude-mythos-5）" style={{ ...inStyle, marginBottom:"6px" }} />
+          <button onClick={addCustom} disabled={!cId.trim()}
+            style={{ ...btnSec, width:"100%", padding:"11px", color: cId.trim() ? T.ink : T.faint, cursor: cId.trim() ? "pointer" : "default" }}>
+            ＋ 一覧に追加
+          </button>
+
+          <label style={{ ...fieldLabel, marginTop:"18px" }}>バックアップ</label>
+          <div style={{ display:"flex", gap:"8px" }}>
+            <button onClick={doExport} style={{ ...btnSec, padding:"11px" }}>書き出す</button>
+            <button onClick={() => fileRef.current?.click()} style={{ ...btnSec, padding:"11px" }}>読み込む</button>
+            <input ref={fileRef} type="file" accept=".json" style={{ display:"none" }}
+              onChange={e => { if (e.target.files?.[0]) doImport(e.target.files[0]); e.target.value=""; }} />
+          </div>
+          <div style={{ fontFamily:FONT_UI, fontSize:"10px", color:T.faint, marginTop:"6px" }}>全作品・設定資料・本棚をJSONで保存／復元</div>
+        </div>
+        <div style={{ padding:"12px 18px 20px", display:"flex", gap:"10px", borderTop:`1px solid ${T.line}` }}>
+          <button onClick={onClose} style={btnSec}>キャンセル</button>
+          <button onClick={handleSave} style={btnPri}>保存する</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ Paper (原稿表示) ═══
+function Paper({ title, body, streaming, workName }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (streaming && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [body, streaming]);
+  return (
+    <div style={{ background:T.paper, borderRadius:"6px", boxShadow:"0 14px 40px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3)", overflow:"hidden", animation:"paperIn .35s ease-out", display:"flex", flexDirection:"column", minHeight:0, flex:1 }}>
+      <div style={{ padding:"14px 20px 10px", borderBottom:`1px solid ${T.paperLine}`, display:"flex", alignItems:"baseline", justifyContent:"space-between", gap:"10px", flexShrink:0 }}>
+        <div style={{ fontFamily:FONT_BODY, fontSize:"16px", fontWeight:600, color:T.paperInk, letterSpacing:".04em", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+          {title ? `『${title}』` : (streaming ? "……" : "無題")}
+        </div>
+        <div style={{ fontFamily:FONT_UI, fontSize:"10px", color:T.paperSub, flexShrink:0, letterSpacing:".08em" }}>
+          {workName} ・ {charCount(body).toLocaleString()}字
+        </div>
+      </div>
+      <div ref={ref} style={{ flex:1, overflowY:"auto", padding:"18px 22px 26px", minHeight:0 }}>
+        <div style={{ fontFamily:FONT_BODY, fontSize:"15px", lineHeight:"2.15", color:T.paperInk, whiteSpace:"pre-wrap", wordBreak:"break-word", letterSpacing:".02em" }}>
+          {body}
+          {streaming && <span style={{ display:"inline-block", width:"2px", height:"1em", background:T.shu, marginLeft:"2px", verticalAlign:"-0.15em", animation:"blink 1s step-end infinite" }} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══ App ═══
+function App() {
+  const [store, setStore] = useState(loadStore);
+  const [prompt, setPrompt] = useState("");
+  const [lengthId, setLengthId] = useState(store.lengthId || "tanpen");
+  const [session, setSession] = useState(null); // { msgs:[], text:"", prompt:"" }
+  const [streamText, setStreamText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const [modal, setModal] = useState(null); // docs | works | library | settings
+  const [reading, setReading] = useState(null); // library item
+  const abortRef = useRef(null);
+
+  useEffect(() => { saveStore({ ...store, lengthId }); }, [store, lengthId]);
+  useEffect(() => { if (!store.apiKey) setModal("settings"); }, []);
+  const showToast = (t) => { setToast(t); setTimeout(() => setToast(""), 1800); };
+
+  const work = store.works.find(w => w.id === store.activeWorkId) || store.works[0];
+  const updateWork = (fn) => setStore(p => ({ ...p, works: p.works.map(w => w.id === work.id ? fn(w) : w) }));
+
+  const displayed = loading ? streamText : (session?.text || "");
+  const lenOpt = LENGTHS.find(l => l.id === lengthId) || LENGTHS[1];
+
+  async function run(msgs, basePrompt, prefix) {
+    if (!store.apiKey) { setModal("settings"); return; }
+    setLoading(true); setError(""); setStreamText(prefix || "");
+    const ctrl = new AbortController(); abortRef.current = ctrl;
+    try {
+      const full = await streamCall({
+        apiKey: store.apiKey, model: store.model,
+        system: buildSystem(work), messages: msgs,
+        maxTokens: lenOpt.maxTokens, signal: ctrl.signal,
+        onDelta: (t) => setStreamText((prefix || "") + t),
+      });
+      const text = (prefix || "") + full;
+      setSession({ msgs: [...msgs, { role:"assistant", content: full }], text, prompt: basePrompt });
+    } catch(err) {
+      console.error(err);
+      setError(errorText(err));
+      if (prefix) setSession(s => s); // 続き失敗時は元の本文を維持
+    } finally {
+      setLoading(false); abortRef.current = null;
+    }
+  }
+
+  const handleGenerate = () => {
+    const p = prompt.trim();
+    if (!p || loading) return;
+    const userMsg = { role:"user", content: `お題:\n${p}\n\n${lenOpt.instr}書いてください。` };
+    run([userMsg], p, "");
+  };
+
+  const handleRetake = () => {
+    if (!session || loading) return;
+    // 最後のassistantを外して同じ依頼をやり直す(上書き)
+    const msgs = session.msgs.slice(0, -1);
+    const prevAssistants = session.msgs.slice(0, -1).filter(m => m.role === "assistant");
+    const prefix = prevAssistants.length ? prevAssistants.map(m => m.content).join("\n\n") + "\n\n" : "";
+    run(msgs, session.prompt, prefix);
+  };
+
+  const handleContinue = () => {
+    if (!session || loading) return;
+    const msgs = [...session.msgs, { role:"user", content:"そのまま自然に続きを書いてください。タイトルは不要、本文のみ。" }];
+    run(msgs, session.prompt, session.text + "\n\n");
+  };
+
+  const handleStop = () => abortRef.current?.abort();
+
+  const handleSave = () => {
+    if (!session?.text) return;
+    const item = { id:"s"+Date.now(), title: parseTitle(session.text), prompt: session.prompt, text: session.text, createdAt: Date.now() };
+    updateWork(w => ({ ...w, library:[...w.library, item] }));
+    showToast("本棚に保存しました");
+  };
+
+  const handleCopy = async () => {
+    try { await navigator.clipboard.writeText(displayed); showToast("コピーしました"); }
+    catch(e) { showToast("コピーできませんでした"); }
+  };
+
+  const hasOutput = !!displayed || loading;
+
+  return (
+    <div style={{ height:"100dvh", display:"flex", flexDirection:"column", maxWidth:"680px", margin:"0 auto", background:T.bg }}>
+      {/* Header */}
+      <div style={{ padding:"12px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:`1px solid ${T.line}`, flexShrink:0 }}>
+        <button onClick={() => setModal("works")} style={{ display:"flex", alignItems:"center", gap:"8px", background:"none", border:"none", cursor:"pointer", padding:"4px 0", minWidth:0 }}>
+          <span style={{ width:"8px", height:"8px", borderRadius:"2px", background:T.shu, flexShrink:0, boxShadow:`0 0 8px ${T.shu}66` }} />
+          <span style={{ fontFamily:FONT_UI, fontSize:"15px", fontWeight:700, color:T.ink, letterSpacing:".03em", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{work.name}</span>
+          <span style={{ fontSize:"10px", color:T.sub }}>▾</span>
+        </button>
+        <div style={{ display:"flex", gap:"4px", flexShrink:0 }}>
+          <button onClick={() => setModal("docs")} style={iconBtn} title="設定資料">📚</button>
+          <button onClick={() => setModal("library")} style={iconBtn} title="本棚">🗂</button>
+          <button onClick={() => setModal("settings")} style={iconBtn} title="設定">⚙️</button>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ flex:1, display:"flex", flexDirection:"column", padding:"14px 14px 0", minHeight:0 }}>
+        {hasOutput ? (
+          <Paper title={parseTitle(displayed) || (session ? parseTitle(session.text) : "")} body={bodyOnly(displayed)} streaming={loading} workName={work.name} />
+        ) : (
+          <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", textAlign:"center", padding:"20px", animation:"fadeIn .4s ease-out" }}>
+            <div style={{ width:"52px", height:"52px", borderRadius:"10px", border:`2px solid ${T.shu}`, color:T.shu, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_BODY, fontSize:"22px", fontWeight:600, marginBottom:"16px", transform:"rotate(-3deg)" }}>書</div>
+            <div style={{ fontFamily:FONT_UI, fontSize:"13px", color:T.sub, lineHeight:"2" }}>
+              下の欄にお題やプロットを書いて、<br/>「生成」を押すとここに原稿が届きます。<br/>
+              <span style={{ color:T.faint, fontSize:"12px" }}>設定資料 📚 を先に書いておくと精度が上がります。</span>
+            </div>
+          </div>
+        )}
+        {error && (
+          <div style={{ marginTop:"10px", padding:"11px 14px", borderRadius:"12px", border:"1px solid rgba(200,80,58,0.4)", background:T.shuSoft, fontFamily:FONT_UI, fontSize:"12px", color:"#e8a496", lineHeight:"1.7", flexShrink:0 }}>{error}</div>
+        )}
+        {/* Action row */}
+        {hasOutput && (
+          <div style={{ display:"flex", gap:"8px", padding:"10px 0 2px", flexShrink:0 }}>
+            {loading ? (
+              <button onClick={handleStop} style={{ ...actBtn, color:T.shu, borderColor:"rgba(200,80,58,0.4)" }}>■ 停止</button>
+            ) : (
+              <React.Fragment>
+                <button onClick={handleRetake} style={actBtn}>↺ リテイク</button>
+                <button onClick={handleContinue} style={actBtn}>→ 続き</button>
+                <button onClick={handleSave} style={{ ...actBtn, color:"#e8c88a", borderColor:"rgba(232,200,138,0.3)" }}>本棚へ</button>
+                <button onClick={() => download((parseTitle(session?.text) || "無題") + ".txt", session?.text || "")} style={actBtn}>.txt</button>
+                <button onClick={handleCopy} style={actBtn}>コピー</button>
+              </React.Fragment>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Input */}
+      <div style={{ padding:"10px 14px calc(14px + env(safe-area-inset-bottom))", flexShrink:0 }}>
+        <div style={{ display:"flex", gap:"6px", marginBottom:"8px" }}>
+          {LENGTHS.map(l => (
+            <button key={l.id} onClick={() => setLengthId(l.id)}
+              style={{ padding:"6px 12px", borderRadius:"20px", cursor:"pointer", fontFamily:FONT_UI, fontSize:"11px",
+                border: lengthId===l.id ? `1px solid ${T.shu}` : `1px solid ${T.line}`,
+                background: lengthId===l.id ? T.shuSoft : "none",
+                color: lengthId===l.id ? "#e8a496" : T.sub }}>
+              {l.label} <span style={{ opacity:.6 }}>{l.hint}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ display:"flex", gap:"8px", alignItems:"flex-end" }}>
+          <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={2}
+            placeholder="お題・プロット・シチュエーションを書く"
+            style={{ ...taStyle, resize:"none", background:T.panel, minHeight:"52px" }} />
+          <button onClick={handleGenerate} disabled={loading || !prompt.trim()}
+            style={{ width:"64px", height:"64px", borderRadius:"12px", border:"none", flexShrink:0, cursor: loading||!prompt.trim() ? "default" : "pointer",
+              background: loading||!prompt.trim() ? "#3a2a27" : T.shu,
+              color: loading||!prompt.trim() ? "#7a5a52" : "#fff",
+              fontFamily:FONT_BODY, fontSize:"17px", fontWeight:600, letterSpacing:".1em", lineHeight:"1.4",
+              boxShadow: loading||!prompt.trim() ? "none" : `0 4px 16px ${T.shu}55`, transform:"rotate(-1.5deg)" }}>
+            生<br/>成
+          </button>
+        </div>
+      </div>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position:"fixed", bottom:"110px", left:"50%", transform:"translateX(-50%)", padding:"10px 20px", borderRadius:"20px", background:"rgba(20,25,38,0.95)", border:`1px solid ${T.line}`, color:T.ink, fontFamily:FONT_UI, fontSize:"12px", zIndex:80, animation:"fadeIn .2s ease-out" }}>{toast}</div>
+      )}
+
+      {/* Modals */}
+      {modal === "docs" && (
+        <DocsEditor work={work} canDelete={store.works.length > 1}
+          onSave={(w) => { updateWork(() => w); setModal(null); showToast("設定資料を保存しました"); }}
+          onDelete={() => { setStore(p => { const works = p.works.filter(x => x.id !== work.id); return { ...p, works, activeWorkId: works[0].id }; }); setSession(null); setModal(null); }}
+          onClose={() => setModal(null)} />
+      )}
+      {modal === "works" && (
+        <WorkSwitcher works={store.works} activeId={work.id}
+          onSelect={(id) => { setStore(p => ({ ...p, activeWorkId:id })); setSession(null); setStreamText(""); setError(""); setModal(null); }}
+          onNew={() => { const w = newWork(); setStore(p => ({ ...p, works:[...p.works, w], activeWorkId:w.id })); setSession(null); setStreamText(""); setModal("docs"); }}
+          onClose={() => setModal(null)} />
+      )}
+      {modal === "library" && (
+        <Library work={work}
+          onOpen={(it) => { setReading(it); setModal(null); }}
+          onDelete={(id) => updateWork(w => ({ ...w, library: w.library.filter(x => x.id !== id) }))}
+          onClose={() => setModal(null)} />
+      )}
+      {modal === "settings" && (
+        <Settings store={store}
+          onSave={(s) => { setStore(p => ({ ...p, ...s })); setModal(null); showToast("設定を保存しました"); }}
+          onClose={() => setModal(null)} />
+      )}
+      {reading && (
+        <div style={{ ...overlay, alignItems:"stretch", padding:"14px" }}>
+          <div style={{ display:"flex", flexDirection:"column", width:"100%", maxWidth:"640px", margin:"0 auto", gap:"10px" }}>
+            <Paper title={reading.title} body={bodyOnly(reading.text)} streaming={false} workName={work.name} />
+            <div style={{ display:"flex", gap:"8px", flexShrink:0, paddingBottom:"env(safe-area-inset-bottom)" }}>
+              <button onClick={() => download((reading.title || "無題") + ".txt", reading.text)} style={actBtn}>.txt</button>
+              <button onClick={async () => { try { await navigator.clipboard.writeText(reading.text); showToast("コピーしました"); } catch(e){} }} style={actBtn}>コピー</button>
+              <button onClick={() => setReading(null)} style={{ ...actBtn, color:T.ink }}>閉じる</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+const iconBtn = { background:"none", border:"none", fontSize:"17px", cursor:"pointer", padding:"5px 7px", opacity:.85 };
+const actBtn = { flex:1, padding:"10px 4px", borderRadius:"11px", border:`1px solid ${T.line}`, background:"rgba(255,255,255,0.03)", color:T.sub, fontSize:"12px", fontFamily:FONT_UI, fontWeight:500, cursor:"pointer", whiteSpace:"nowrap" };
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
