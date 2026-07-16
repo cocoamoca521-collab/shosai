@@ -187,6 +187,13 @@ function fmtDate(ts) {
   const d = new Date(ts);
   return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
 }
+function resolveModelTags(ids, store) {
+  if (!ids?.length) return "";
+  const seen = new Set();
+  const uniq = ids.filter(id => { if (seen.has(id)) return false; seen.add(id); return true; });
+  const all = [...MODELS, ...(store.customModels || [])];
+  return uniq.map(id => all.find(m => m.id === id)?.tag || id).join("・");
+}
 function download(filename, text) {
   const blob = new Blob([text], { type:"text/plain;charset=utf-8" });
   const a = document.createElement("a");
@@ -273,7 +280,7 @@ function WorkSwitcher({ works, activeId, onSelect, onNew, onClose }) {
 }
 
 // ═══ Library ═══
-function Library({ work, onOpen, onDelete, onClose }) {
+function Library({ work, store, onOpen, onDelete, onClose }) {
   const items = [...work.library].sort((a,b) => b.createdAt - a.createdAt);
   return (
     <div style={overlay}>
@@ -288,11 +295,13 @@ function Library({ work, onOpen, onDelete, onClose }) {
               まだ何も並んでいません。<br/>お題を書いて生成し、「保存」でここに増えます。
             </div>
           )}
-          {items.map(it => (
+          {items.map(it => {
+            const modelTag = resolveModelTags(it.models, store);
+            return (
             <div key={it.id} style={{ padding:"14px", marginBottom:"8px", borderRadius:"12px", border:`1px solid ${T.line}`, background:"rgba(255,255,255,0.03)" }}>
               <div onClick={() => onOpen(it)} style={{ cursor:"pointer" }}>
                 <div style={{ fontFamily:FONT_BODY, fontSize:"15px", fontWeight:600, color:T.ink }}>『{it.title || "無題"}』</div>
-                <div style={{ fontFamily:FONT_UI, fontSize:"11px", color:T.sub, marginTop:"4px" }}>{fmtDate(it.createdAt)} ・ {charCount(it.text).toLocaleString()}字</div>
+                <div style={{ fontFamily:FONT_UI, fontSize:"11px", color:T.sub, marginTop:"4px" }}>{fmtDate(it.createdAt)} ・ {charCount(it.text).toLocaleString()}字{modelTag ? ` ・ ${modelTag}` : ""}</div>
               </div>
               <div style={{ display:"flex", gap:"8px", marginTop:"10px" }}>
                 <button onClick={() => onOpen(it)} style={{ ...miniBtn }}>読む</button>
@@ -300,7 +309,8 @@ function Library({ work, onOpen, onDelete, onClose }) {
                 <button onClick={() => { if (confirm(`『${it.title || "無題"}』を削除しますか？`)) onDelete(it.id); }} style={{ ...miniBtn, color:T.shu }}>削除</button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -414,7 +424,7 @@ function Settings({ store, onSave, onClose }) {
 }
 
 // ═══ Paper (原稿表示) ═══
-function Paper({ title, body, streaming, workName }) {
+function Paper({ title, body, streaming, workName, modelLabel }) {
   const ref = useRef(null);
   useEffect(() => {
     if (streaming && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
@@ -426,7 +436,7 @@ function Paper({ title, body, streaming, workName }) {
           {title ? `『${title}』` : (streaming ? "……" : "無題")}
         </div>
         <div style={{ fontFamily:FONT_UI, fontSize:"10px", color:T.paperSub, flexShrink:0, letterSpacing:".08em" }}>
-          {workName} ・ {charCount(body).toLocaleString()}字
+          {workName} ・ {charCount(body).toLocaleString()}字{modelLabel ? ` ・ ${modelLabel}` : ""}
         </div>
       </div>
       <div ref={ref} style={{ flex:1, overflowY:"auto", padding:"18px 22px 26px", minHeight:0 }}>
@@ -444,7 +454,7 @@ function App() {
   const [store, setStore] = useState(loadStore);
   const [prompt, setPrompt] = useState("");
   const [lengthId, setLengthId] = useState(store.lengthId || "tanpen");
-  const [session, setSession] = useState(null); // { msgs:[], text:"", prompt:"" }
+  const [session, setSession] = useState(null); // { msgs:[], text:"", prompt:"", modelLog:[] }
   const [streamText, setStreamText] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -463,19 +473,20 @@ function App() {
   const displayed = loading ? streamText : (session?.text || "");
   const lenOpt = LENGTHS.find(l => l.id === lengthId) || LENGTHS[1];
 
-  async function run(msgs, basePrompt, prefix) {
+  async function run(msgs, basePrompt, prefix, modelLogBase = []) {
     if (!store.apiKey) { setModal("settings"); return; }
     setLoading(true); setError(""); setStreamText(prefix || "");
     const ctrl = new AbortController(); abortRef.current = ctrl;
+    const usedModel = store.model;
     try {
       const full = await streamCall({
-        apiKey: store.apiKey, model: store.model,
+        apiKey: store.apiKey, model: usedModel,
         system: buildSystem(work), messages: msgs,
         maxTokens: lenOpt.maxTokens, signal: ctrl.signal,
         onDelta: (t) => setStreamText((prefix || "") + t),
       });
       const text = (prefix || "") + full;
-      setSession({ msgs: [...msgs, { role:"assistant", content: full }], text, prompt: basePrompt });
+      setSession({ msgs: [...msgs, { role:"assistant", content: full }], text, prompt: basePrompt, modelLog: [...modelLogBase, usedModel] });
     } catch(err) {
       console.error(err);
       setError(errorText(err));
@@ -489,7 +500,7 @@ function App() {
     const p = prompt.trim();
     if (!p || loading) return;
     const userMsg = { role:"user", content: `お題:\n${p}\n\n${lenOpt.instr}書いてください。` };
-    run([userMsg], p, "");
+    run([userMsg], p, "", []);
   };
 
   const handleRetake = () => {
@@ -498,20 +509,21 @@ function App() {
     const msgs = session.msgs.slice(0, -1);
     const prevAssistants = session.msgs.slice(0, -1).filter(m => m.role === "assistant");
     const prefix = prevAssistants.length ? prevAssistants.map(m => m.content).join("\n\n") + "\n\n" : "";
-    run(msgs, session.prompt, prefix);
+    const modelLogBase = (session.modelLog || []).slice(0, -1);
+    run(msgs, session.prompt, prefix, modelLogBase);
   };
 
   const handleContinue = () => {
     if (!session || loading) return;
     const msgs = [...session.msgs, { role:"user", content:"そのまま自然に続きを書いてください。タイトルは不要、本文のみ。" }];
-    run(msgs, session.prompt, session.text + "\n\n");
+    run(msgs, session.prompt, session.text + "\n\n", session.modelLog || []);
   };
 
   const handleStop = () => abortRef.current?.abort();
 
   const handleSave = () => {
     if (!session?.text) return;
-    const item = { id:"s"+Date.now(), title: parseTitle(session.text), prompt: session.prompt, text: session.text, createdAt: Date.now() };
+    const item = { id:"s"+Date.now(), title: parseTitle(session.text), prompt: session.prompt, text: session.text, createdAt: Date.now(), models: [...new Set(session.modelLog || [])] };
     updateWork(w => ({ ...w, library:[...w.library, item] }));
     showToast("本棚に保存しました");
   };
@@ -542,7 +554,7 @@ function App() {
       {/* Main */}
       <div style={{ flex:1, display:"flex", flexDirection:"column", padding:"14px 14px 0", minHeight:0 }}>
         {hasOutput ? (
-          <Paper title={parseTitle(displayed) || (session ? parseTitle(session.text) : "")} body={bodyOnly(displayed)} streaming={loading} workName={work.name} />
+          <Paper title={parseTitle(displayed) || (session ? parseTitle(session.text) : "")} body={bodyOnly(displayed)} streaming={loading} workName={work.name} modelLabel={loading ? "" : resolveModelTags(session?.modelLog, store)} />
         ) : (
           <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", textAlign:"center", padding:"20px", animation:"fadeIn .4s ease-out" }}>
             <div style={{ width:"52px", height:"52px", borderRadius:"10px", border:`2px solid ${T.shu}`, color:T.shu, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_BODY, fontSize:"22px", fontWeight:600, marginBottom:"16px", transform:"rotate(-3deg)" }}>書</div>
@@ -620,7 +632,7 @@ function App() {
           onClose={() => setModal(null)} />
       )}
       {modal === "library" && (
-        <Library work={work}
+        <Library work={work} store={store}
           onOpen={(it) => { setReading(it); setModal(null); }}
           onDelete={(id) => updateWork(w => ({ ...w, library: w.library.filter(x => x.id !== id) }))}
           onClose={() => setModal(null)} />
@@ -633,7 +645,7 @@ function App() {
       {reading && (
         <div style={{ ...overlay, alignItems:"stretch", padding:"14px" }}>
           <div style={{ display:"flex", flexDirection:"column", width:"100%", maxWidth:"640px", margin:"0 auto", gap:"10px" }}>
-            <Paper title={reading.title} body={bodyOnly(reading.text)} streaming={false} workName={work.name} />
+            <Paper title={reading.title} body={bodyOnly(reading.text)} streaming={false} workName={work.name} modelLabel={resolveModelTags(reading.models, store)} />
             <div style={{ display:"flex", gap:"8px", flexShrink:0, paddingBottom:"env(safe-area-inset-bottom)" }}>
               <button onClick={() => download((reading.title || "無題") + ".txt", reading.text)} style={actBtn}>.txt</button>
               <button onClick={async () => { try { await navigator.clipboard.writeText(reading.text); showToast("コピーしました"); } catch(e){} }} style={actBtn}>コピー</button>
