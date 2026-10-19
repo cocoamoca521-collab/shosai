@@ -1,7 +1,7 @@
 {
   "name": "書斎 — SS Studio",
   "short_name": "書斎",
-  "id": "/shosai/?pwa=1",
+  "id": "/shosai/",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
